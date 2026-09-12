@@ -1,5 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
+use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 
 use once_cell::sync::Lazy;
@@ -22,4 +23,18 @@ fn test() {
     while !*success {
         success = TEST.1.wait(success).unwrap();
     }
+}
+
+#[test]
+fn lazy_cell_does_not_cross_threads() {
+    trait AmbiguousIfSend<A> {}
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {}
+    trait AmbiguousIfSync<A> {}
+    impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+    impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
+    fn send<T: AmbiguousIfSend<A>, A>() {}
+    fn sync<T: AmbiguousIfSync<A>, A>() {}
+    send::<wasm_bindgen::__rt::LazyCell<Rc<()>>, _>();
+    sync::<wasm_bindgen::__rt::LazyCell<Rc<()>>, _>();
 }

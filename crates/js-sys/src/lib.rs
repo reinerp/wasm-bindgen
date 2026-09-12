@@ -6035,6 +6035,14 @@ extern "C" {
 /// This allows access to the global properties and global names by accessing
 /// the `Object` returned.
 pub fn global() -> Object {
+    #[cfg(not(target_family = "wasm"))]
+    panic!("cannot access JavaScript globals on non-Wasm targets");
+    #[cfg(target_family = "wasm")]
+    global_wasm()
+}
+
+#[cfg(target_family = "wasm")]
+fn global_wasm() -> Object {
     use once_cell::unsync::Lazy;
 
     struct Wrapper<T>(Lazy<T>);

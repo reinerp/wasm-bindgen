@@ -21,13 +21,15 @@ pub mod marker;
 
 pub use wasm_bindgen_macro::BindgenedStruct;
 
-/// Wrapper around [`Lazy`] adding `Send + Sync` when `atomics` is not enabled.
+/// Wrapper around [`Lazy`] adding `Send + Sync` on single-threaded Wasm.
 pub struct LazyCell<T, F = fn() -> T>(Wrapper<Lazy<T, F>>);
 
 struct Wrapper<T>(T);
 
+#[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
 unsafe impl<T> Sync for Wrapper<T> {}
 
+#[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
 unsafe impl<T> Send for Wrapper<T> {}
 
 impl<T, F> LazyCell<T, F> {
@@ -65,6 +67,12 @@ pub struct LazyLock<T, F = fn() -> T> {
     state: AtomicU8,
     data: Wrapper<UnsafeCell<Data<T, F>>>,
 }
+
+#[cfg(target_feature = "atomics")]
+unsafe impl<T: Send, F: Send> Send for LazyLock<T, F> {}
+
+#[cfg(target_feature = "atomics")]
+unsafe impl<T: Send + Sync, F: Send> Sync for LazyLock<T, F> {}
 
 #[cfg(target_feature = "atomics")]
 enum Data<T, F> {
@@ -133,12 +141,26 @@ impl<T> Deref for LazyLock<T> {
 
 #[macro_export]
 #[doc(hidden)]
-#[cfg(not(target_feature = "atomics"))]
+#[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
 macro_rules! __wbindgen_thread_local {
     ($wasm_bindgen:tt, $actual_ty:ty) => {{
         static _VAL: $wasm_bindgen::__rt::LazyCell<$actual_ty> =
             $wasm_bindgen::__rt::LazyCell::new(init);
         $wasm_bindgen::JsThreadLocal { __inner: &_VAL }
+    }};
+}
+
+#[macro_export]
+#[doc(hidden)]
+#[cfg(not(target_family = "wasm"))]
+macro_rules! __wbindgen_thread_local {
+    ($wasm_bindgen:tt, $actual_ty:ty) => {{
+        fn unsupported() -> *const $actual_ty {
+            panic!("cannot access imported statics on non-Wasm targets")
+        }
+        $wasm_bindgen::JsThreadLocal {
+            __inner: unsupported,
+        }
     }};
 }
 
@@ -527,23 +549,34 @@ pub fn link_mem_intrinsics() {
     crate::link::link_intrinsics();
 }
 
+#[cfg(target_family = "wasm")]
 #[cfg_attr(target_feature = "atomics", thread_local)]
 static GLOBAL_EXNDATA: Wrapper<Cell<[u32; 2]>> = Wrapper(Cell::new([0; 2]));
 
 #[no_mangle]
 pub unsafe extern "C" fn __wbindgen_exn_store(idx: u32) {
-    debug_assert_eq!(GLOBAL_EXNDATA.0.get()[0], 0);
-    GLOBAL_EXNDATA.0.set([1, idx]);
+    #[cfg(not(target_family = "wasm"))]
+    panic!("cannot store JS exceptions on non-Wasm targets");
+    #[cfg(target_family = "wasm")]
+    {
+        debug_assert_eq!(GLOBAL_EXNDATA.0.get()[0], 0);
+        GLOBAL_EXNDATA.0.set([1, idx]);
+    }
 }
 
 pub fn take_last_exception() -> Result<(), super::JsValue> {
-    let ret = if GLOBAL_EXNDATA.0.get()[0] == 1 {
-        Err(super::JsValue::_new(GLOBAL_EXNDATA.0.get()[1]))
-    } else {
-        Ok(())
-    };
-    GLOBAL_EXNDATA.0.set([0, 0]);
-    ret
+    #[cfg(not(target_family = "wasm"))]
+    return Ok(());
+    #[cfg(target_family = "wasm")]
+    {
+        let ret = if GLOBAL_EXNDATA.0.get()[0] == 1 {
+            Err(super::JsValue::_new(GLOBAL_EXNDATA.0.get()[1]))
+        } else {
+            Ok(())
+        };
+        GLOBAL_EXNDATA.0.set([0, 0]);
+        ret
+    }
 }
 
 /// An internal helper trait for usage in `#[wasm_bindgen]` on `async`

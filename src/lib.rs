@@ -1255,10 +1255,10 @@ impl<T: FromWasmAbi + 'static> Deref for JsStatic<T> {
 /// ```
 pub struct JsThreadLocal<T: 'static> {
     #[doc(hidden)]
-    #[cfg(not(target_feature = "atomics"))]
+    #[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
     pub __inner: &'static __rt::LazyCell<T>,
     #[doc(hidden)]
-    #[cfg(target_feature = "atomics")]
+    #[cfg(any(not(target_family = "wasm"), target_feature = "atomics"))]
     pub __inner: fn() -> *const T,
 }
 
@@ -1267,9 +1267,9 @@ impl<T> JsThreadLocal<T> {
     where
         F: FnOnce(&T) -> R,
     {
-        #[cfg(not(target_feature = "atomics"))]
+        #[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
         return f(self.__inner);
-        #[cfg(target_feature = "atomics")]
+        #[cfg(any(not(target_family = "wasm"), target_feature = "atomics"))]
         f(unsafe { &*(self.__inner)() })
     }
 }

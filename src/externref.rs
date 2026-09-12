@@ -117,20 +117,26 @@ fn internal_error(msg: &str) -> ! {
 
 // Management of `externref` is always thread local since an `externref` value
 // can't cross threads in wasm. Indices as a result are always thread-local.
+#[cfg(target_family = "wasm")]
 #[cfg_attr(target_feature = "atomics", thread_local)]
 static HEAP_SLAB: crate::__rt::LazyCell<Cell<Slab>> =
     crate::__rt::LazyCell::new(|| Cell::new(Slab::new()));
 
 #[no_mangle]
 pub extern "C" fn __externref_table_alloc() -> usize {
-    HEAP_SLAB
-        .try_with(|slot| {
-            let mut slab = slot.replace(Slab::new());
-            let ret = slab.alloc();
-            slot.replace(slab);
-            ret
-        })
-        .unwrap_or_else(|_| internal_error("tls access failure"))
+    #[cfg(not(target_family = "wasm"))]
+    panic!("cannot allocate JS externrefs on non-Wasm targets");
+    #[cfg(target_family = "wasm")]
+    {
+        HEAP_SLAB
+            .try_with(|slot| {
+                let mut slab = slot.replace(Slab::new());
+                let ret = slab.alloc();
+                slot.replace(slab);
+                ret
+            })
+            .unwrap_or_else(|_| internal_error("tls access failure"))
+    }
 }
 
 #[no_mangle]
@@ -138,18 +144,23 @@ pub extern "C" fn __externref_table_dealloc(idx: usize) {
     if idx < super::JSIDX_RESERVED as usize {
         return;
     }
-    // clear this value from the table so while the table slot is un-allocated
-    // we don't keep around a strong reference to a potentially large object
-    unsafe {
-        __wbindgen_externref_table_set_null(idx);
+    #[cfg(not(target_family = "wasm"))]
+    panic!("cannot deallocate JS externrefs on non-Wasm targets");
+    #[cfg(target_family = "wasm")]
+    {
+        // clear this value from the table so while the table slot is un-allocated
+        // we don't keep around a strong reference to a potentially large object
+        unsafe {
+            __wbindgen_externref_table_set_null(idx);
+        }
+        HEAP_SLAB
+            .try_with(|slot| {
+                let mut slab = slot.replace(Slab::new());
+                slab.dealloc(idx);
+                slot.replace(slab);
+            })
+            .unwrap_or_else(|_| internal_error("tls access failure"))
     }
-    HEAP_SLAB
-        .try_with(|slot| {
-            let mut slab = slot.replace(Slab::new());
-            slab.dealloc(idx);
-            slot.replace(slab);
-        })
-        .unwrap_or_else(|_| internal_error("tls access failure"))
 }
 
 #[no_mangle]
@@ -163,12 +174,17 @@ pub unsafe extern "C" fn __externref_drop_slice(ptr: *mut JsValue, len: usize) {
 // `externref` instead of the JS `heap`.
 #[no_mangle]
 pub unsafe extern "C" fn __externref_heap_live_count() -> u32 {
-    HEAP_SLAB
-        .try_with(|slot| {
-            let slab = slot.replace(Slab::new());
-            let count = slab.live_count();
-            slot.replace(slab);
-            count
-        })
-        .unwrap_or_else(|_| internal_error("tls access failure"))
+    #[cfg(not(target_family = "wasm"))]
+    return 0;
+    #[cfg(target_family = "wasm")]
+    {
+        HEAP_SLAB
+            .try_with(|slot| {
+                let slab = slot.replace(Slab::new());
+                let count = slab.live_count();
+                slot.replace(slab);
+                count
+            })
+            .unwrap_or_else(|_| internal_error("tls access failure"))
+    }
 }
